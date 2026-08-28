@@ -24,7 +24,9 @@ properties:
 
   out:
     description: |
-      The out setting expects the name of one or more destination nodes. Each sample which is processed by the path will be sent to each of the destination nodes.
+      The out setting expects the name of one or more destination nodes or mapping expressions. Each sample which is processed by the path will be sent to each of the destination nodes.
+
+      A mapping expression such as `node.data[0-2]` writes the samples of this path into the given slots of the destination node's input vector instead of the whole vector. Several paths may feed the same node as long as the slices they write are disjoint. Slots which no path writes keep their initial value.
 
     oneOf:
     - type: string

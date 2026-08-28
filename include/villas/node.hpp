@@ -8,6 +8,7 @@
 #pragma once
 
 #include <iostream>
+#include <mutex>
 
 #include <fmt/ostream.h>
 #include <jansson.h>
@@ -46,6 +47,26 @@ namespace node {
 class NodeFactory;
 class SuperNode;
 
+/* A mutex which does not take part in copies.
+ *
+ * A std::mutex cannot be copied, and a class holding one directly cannot be
+ * either. A copy is a distinct object guarding its own data, so it just starts
+ * out with a fresh, unlocked mutex.
+ */
+class CopyableMutex {
+protected:
+  std::mutex mtx;
+
+public:
+  CopyableMutex() = default;
+  CopyableMutex(const CopyableMutex &) {}
+  CopyableMutex &operator=(const CopyableMutex &) { return *this; }
+
+  void lock() { mtx.lock(); }
+  void unlock() { mtx.unlock(); }
+  bool try_lock() { return mtx.try_lock(); }
+};
+
 /* The class for a node.
  *
  * Every entity which exchanges messages is represented by a node.
@@ -67,6 +88,7 @@ public:
   PathSourceList sources; // A list of path sources which reference this node.
   PathDestinationList
       destinations; // A list of path destinations which reference this node.
+
   std::string configPath;
 
 #ifdef __linux__
@@ -79,6 +101,27 @@ public:
 #endif                            // __linux__
 
 protected:
+  /* The write-side merge buffer of this node.
+   *
+   * A node consumes its whole input vector in one write. When several paths
+   * each supply only a slice of that vector (demultiplexing), the slices have
+   * to be merged before the node can be written. These members hold the merged
+   * state between writes, so that slots which the currently triggering path
+   * does not refresh keep the value another path last wrote to them.
+   *
+   * Only allocated by prepareOutputBuffer() if the node actually has mapped
+   * path destinations. Null otherwise, which selects the verbatim write path.
+   */
+  struct Sample *output_buffer;
+  SignalList::Ptr output_signals;
+  unsigned output_width; // Number of slots, derived from the mappings.
+  uint64_t output_sequence;
+
+  /* The contributing paths each run in their own thread, so both the merge
+   * and the node write below it are serialized by this.
+   */
+  CopyableMutex output_mutex;
+
   enum State state;
 
   uuid_t uuid;
@@ -179,6 +222,25 @@ public:
    * @return		    The number of messages actually sent.
    */
   int write(struct Sample *smps[], unsigned cnt);
+
+  /*
+   * Write samples from one path into the output buffer
+   * Without a mapping samples go to write()
+   *
+   * @return number of samples written or -1 on error
+   */
+  int writeFromPath(PathDestination *pd, struct Sample *smps[], unsigned cnt);
+
+  /*
+   * Size and allocate the output buffer used by writeFromPath()
+   * The buffer stays null if no path uses a mapping
+   *
+   * Run once at startup, after all paths are prepared, as Path::prepare()
+   * resolves a mapping to slot numbers
+   *
+   * @throw RuntimeError if two paths claim the same slot
+   */
+  void prepareOutputBuffer();
 
   // Reverse local and remote socket address.
   virtual int reverse() { return -1; }

@@ -253,6 +253,24 @@ void Path::prepare(NodeList &nodes) {
     ps->mappings.push_back(me);
   }
 
+  /* Resolve the slice which each destination writes.
+   *
+   * The ranges are resolved against the destination's own signal list, so
+   * that slots may be addressed by name as well as by index. Sizing the merge
+   * buffers happens afterwards in Node::prepareOutputBuffer(), once every
+   * path has got this far.
+   */
+  for (auto pd : destinations) {
+    auto me = pd->getOutputMappingEntry();
+    if (!me)
+      continue;
+
+    ret = me->prepare(nodes);
+    if (ret)
+      throw RuntimeError("Failed to prepare output mapping of path {}",
+                         this->toString());
+  }
+
   // Prepare path destinations
   int mt_cnt = 0;
   for (auto pd : destinations) {
@@ -374,29 +392,8 @@ void Path::parse(json_t *json, NodeList &nodes, const uuid_t sn_uuid) {
                       this->toString());
 
   // Output node(s)
-  NodeList dests;
-  if (json_out) {
-    ret = dests.parse(json_out, nodes);
-    if (ret)
-      throw ConfigError(json_out, "node-config-path-out",
-                        "Failed to parse output nodes");
-  }
-
-  for (auto *n : dests) {
-    if (n->out.path)
-      throw ConfigError(
-          json, "node-config-path",
-          "Every node must only be used by a single path as destination");
-
-    n->out.path = this;
-
-    auto pd = std::make_shared<PathDestination>(this, n);
-    if (!pd)
-      throw MemoryAllocationError();
-
-    n->destinations.push_back(pd);
-    destinations.push_back(pd);
-  }
+  if (json_out)
+    parseOut(json_out, nodes);
 
 #ifdef WITH_HOOKS
   if (json_hooks)
@@ -408,6 +405,93 @@ void Path::parse(json_t *json, NodeList &nodes, const uuid_t sn_uuid) {
 
   config = json;
   state = State::PARSED;
+}
+
+void Path::parseOutEntry(json_t *json_entry, NodeList &nodes) {
+  const char *str = json_string_value(json_entry);
+  if (!str)
+    throw ConfigError(json_entry, "node-config-path-out",
+                      "The 'out' setting must be a single string or an array "
+                      "of strings");
+
+  Node *n;
+  MappingEntry::Ptr me;
+
+  if (Node::isValidName(str)) {
+    n = nodes.lookup(str);
+    if (!n) {
+      std::stringstream allss;
+      for (auto *o : nodes)
+        allss << " " << o->getNameShort();
+
+      throw ConfigError(json_entry, "node-config-path-out",
+                        "Unknown node {}. Choose of one of:{}", str,
+                        allss.str());
+    }
+  } else {
+    me = std::make_shared<MappingEntry>();
+    if (!me)
+      throw MemoryAllocationError();
+
+    me->parseString(str);
+
+    if (me->type != MappingEntry::Type::DATA)
+      throw ConfigError(json_entry, "node-config-path-out",
+                        "Only data mappings such as 'node.data[0-2]' are "
+                        "supported in the 'out' setting of a path: {}",
+                        str);
+
+    n = nodes.lookup(me->nodeName);
+    if (!n)
+      throw ConfigError(json_entry, "node-config-path-out",
+                        "Unknown node {} in output mapping: {}", me->nodeName,
+                        str);
+
+    me->node = n;
+  }
+  
+  if (n->out.path) {
+    bool sliced = std::any_of(n->destinations.begin(), n->destinations.end(),
+                              [](auto pd) { return pd->isOutputMapped(); });
+
+    if (!me || !sliced)
+      throw ConfigError(json_entry, "node-config-path",
+                        "Every node must only be used by a single path as "
+                        "destination. Node {} is already used by path {}. "
+                        "Several paths may only feed it if each of them writes "
+                        "a distinct slice, e.g. \"{}.data[0-2]\".",
+                        n->getNameShort(), n->out.path->toString(),
+                        n->getNameShort());
+  } else
+    n->out.path = this;
+
+  auto pd = std::make_shared<PathDestination>(this, n, me);
+  if (!pd)
+    throw MemoryAllocationError();
+
+  n->destinations.push_back(pd);
+  destinations.push_back(pd);
+}
+
+void Path::parseOut(json_t *json_out, NodeList &nodes) {
+  size_t i;
+  json_t *json_entry;
+
+  switch (json_typeof(json_out)) {
+  case JSON_STRING:
+    parseOutEntry(json_out, nodes);
+    break;
+
+  case JSON_ARRAY:
+    json_array_foreach (json_out, i, json_entry)
+      parseOutEntry(json_entry, nodes);
+    break;
+
+  default:
+    throw ConfigError(json_out, "node-config-path-out",
+                      "The 'out' setting must be a single string or an array "
+                      "of strings");
+  }
 }
 
 void Path::parseMask(json_t *json_mask, NodeList &nodes) {

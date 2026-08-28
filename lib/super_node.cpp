@@ -315,6 +315,9 @@ void SuperNode::prepare() {
   prepareNodes();
   preparePaths();
 
+  for (auto *n : nodes)
+    n->prepareOutputBuffer();
+
   for (auto *n : nodes) {
     if (n->sources.size() == 0 && n->destinations.size() == 0) {
       logger->info("Node {} is not used by any path. Disabling...",

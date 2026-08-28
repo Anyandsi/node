@@ -5,6 +5,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#include <fmt/format.h>
+#include <fmt/ranges.h>
 #include <villas/exceptions.hpp>
 #include <villas/node.hpp>
 #include <villas/node/memory.hpp>
@@ -16,7 +18,8 @@
 using namespace villas;
 using namespace villas::node;
 
-PathDestination::PathDestination(Path *p, Node *n) : node(n), path(p) {
+PathDestination::PathDestination(Path *p, Node *n, MappingEntry::Ptr me)
+    : node(n), path(p), output_mapping_entry(me) {
   queue.state = State::DESTROYED;
 }
 
@@ -82,7 +85,8 @@ void PathDestination::write() {
         "Dequeued {} samples from queue of node {} which is part of path {}",
         allocated, node->getName(), path->toString());
 
-    sent = node->write(smps, allocated);
+    sent = node->writeFromPath(this, smps, allocated);
+
     if (sent < 0) {
       path->logger->error("Failed to sent {} samples to node {}: reason={}",
                           cnt, node->getName(), sent);

@@ -8,8 +8,12 @@
 #pragma once
 
 #include <memory>
+#include <mutex>
+#include <vector>
 
+#include <villas/mapping.hpp>
 #include <villas/queue.h>
+#include <villas/signal_list.hpp>
 
 namespace villas {
 namespace node {
@@ -29,11 +33,12 @@ public:
 protected:
   Node *node;
   Path *path;
+  MappingEntry::Ptr output_mapping_entry;
 
   struct CQueue queue;
 
 public:
-  PathDestination(Path *p, Node *n);
+  PathDestination(Path *p, Node *n, MappingEntry::Ptr me = nullptr);
 
   ~PathDestination();
 
@@ -47,6 +52,14 @@ public:
   void write();
 
   Node *getNode() const { return node; }
+
+  Path *getPath() const { return path; }
+
+  MappingEntry::Ptr getOutputMappingEntry() const {
+    return output_mapping_entry;
+  }
+
+  bool isOutputMapped() const { return output_mapping_entry != nullptr; }
 };
 
 using PathDestinationList = std::vector<PathDestination::Ptr>;

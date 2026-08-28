@@ -164,6 +164,12 @@ public:
    */
   void parse(json_t *json, NodeList &nodes, const uuid_t sn_uuid);
 
+  // Parse the 'out' setting of a path into a list of path destinations.
+  void parseOut(json_t *json_out, NodeList &nodes);
+
+  // Parse a single entry of the 'out' setting.
+  void parseOutEntry(json_t *json_entry, NodeList &nodes);
+
   void parseMask(json_t *json_mask, NodeList &nodes);
 
   bool isSimple() const;

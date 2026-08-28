@@ -7,6 +7,7 @@
 
 #include <regex>
 
+#include <fmt/ranges.h>
 #include <openssl/md5.h>
 
 #ifdef __linux__
@@ -52,6 +53,7 @@ Node::Node(const uuid_t &id, const std::string &name)
 #ifdef WITH_NETEM
       tc_qdisc(nullptr), tc_classifier(nullptr),
 #endif // WITH_NETEM
+      output_buffer(nullptr), output_width(0), output_sequence(0),
       state(State::INITIALIZED), enabled(true), config(nullptr),
       name_short(name), affinity(-1), // all cores
       factory(nullptr) {
@@ -70,6 +72,9 @@ Node::Node(const uuid_t &id, const std::string &name)
 }
 
 Node::~Node() {
+  if (output_buffer)
+    sample_decref(output_buffer);
+
 #ifdef WITH_NETEM
   rtnl_qdisc_put(tc_qdisc);
   rtnl_cls_put(tc_classifier);
@@ -337,6 +342,146 @@ int Node::write(struct Sample *smps[], unsigned cnt) {
   return nsent;
 }
 
+void Node::prepareOutputBuffer() {
+  PathDestinationList mapped;
+  for (auto pd : destinations) {
+    if (pd->isOutputMapped())
+      mapped.push_back(pd);
+  }
+
+  if (mapped.empty())
+    return;
+
+  // Their slices must be disjoint, and together they give the width of the vector
+  for (unsigned i = 0; i < mapped.size(); i++) {
+    auto me = mapped[i]->getOutputMappingEntry();
+
+    unsigned first = me->data.offset;
+    unsigned last = first + me->length - 1;
+
+    for (unsigned j = 0; j < i; j++) {
+      auto ome = mapped[j]->getOutputMappingEntry();
+
+      unsigned ofirst = ome->data.offset;
+      unsigned olast = ofirst + ome->length - 1;
+
+      if (first <= olast && ofirst <= last)
+        throw RuntimeError(
+            "Output mappings of paths {} and {} both write slots {}-{} of "
+            "node {}. The slices of a destination node must be disjoint.",
+            mapped[i]->getPath()->toString(), mapped[j]->getPath()->toString(),
+            std::max(first, ofirst), std::min(last, olast), getName());
+    }
+
+    if (last + 1 > output_width)
+      output_width = last + 1;
+  }
+
+  output_signals = std::make_shared<SignalList>();
+  output_signals->resize(output_width);
+  auto nsigs = getInputSignals();
+
+  auto signalForSlot = [&](unsigned slot, Signal::Ptr fallback) {
+    auto sig =
+        nsigs && slot < nsigs->size() ? nsigs->getByIndex(slot) : Signal::Ptr();
+    if (sig)
+      return sig;
+
+    if (fallback)
+      return fallback;
+
+    return std::make_shared<Signal>(fmt::format("slot{}", slot), "",
+                                    SignalType::FLOAT);
+  };
+
+  std::vector<bool> covered(output_width, false);
+
+  for (auto m : mapped) {
+    auto me = m->getOutputMappingEntry();
+    auto psigs = m->getPath()->getOutputSignals();
+
+    for (int j = 0; j < me->length; j++) {
+      unsigned slot = me->data.offset + j;
+
+      auto fallback = psigs && (unsigned)j < psigs->size()
+                          ? psigs->getByIndex(j)
+                          : Signal::Ptr();
+
+      (*output_signals)[slot] = signalForSlot(slot, fallback);
+      covered[slot] = true;
+    }
+  }
+
+  std::vector<unsigned> uncovered;
+  for (unsigned i = 0; i < output_width; i++) {
+    if (!covered[i]) {
+      uncovered.push_back(i);
+
+      (*output_signals)[i] = signalForSlot(i, Signal::Ptr());
+    }
+  }
+
+  if (!uncovered.empty())
+    logger->warn("Slots {} of node {} are not written by any path. They will "
+                 "keep their initial value for the whole run.",
+                 fmt::join(uncovered, ", "), getName());
+
+  output_buffer = sample_alloc_mem(output_width);
+  if (!output_buffer)
+    throw MemoryAllocationError();
+
+  output_buffer->length = 0; // Grows as the paths contribute their slices
+  output_buffer->signals = output_signals;
+  output_buffer->flags = (int)SampleFlags::HAS_DATA |
+                         (int)SampleFlags::HAS_SEQUENCE |
+                         (int)SampleFlags::HAS_TS_ORIGIN;
+
+  for (unsigned i = 0; i < output_width; i++)
+    output_buffer->data[i] = (*output_signals)[i]->init;
+}
+
+int Node::writeFromPath(PathDestination *pd, struct Sample *smps[],
+                        unsigned cnt) {
+  auto me = pd->getOutputMappingEntry();
+
+  // No mapping: this path is the only one writing and there is nothing to merge
+  if (!me)
+    return write(smps, cnt);
+
+  if (!output_buffer)
+    return -1;
+
+  std::lock_guard<CopyableMutex> guard(output_mutex);
+
+  unsigned nsent = 0;
+
+  // for each sample delivered, drop sample values into path's slots
+  for (unsigned i = 0; i < cnt; i++) {
+    struct Sample *smp = smps[i];
+
+    unsigned len = std::min(static_cast<unsigned>(me->length), smp->length);
+    for (unsigned j = 0; j < len; j++)
+      output_buffer->data[me->data.offset + j] = smp->data[j];
+
+    unsigned high = me->data.offset + len;
+    if (high > output_buffer->length)
+      output_buffer->length = high;
+
+    output_buffer->ts = smp->ts;
+    output_buffer->sequence = output_sequence++;
+
+    struct Sample *merged[] = {output_buffer};
+
+    int sent = write(merged, 1);
+    if (sent < 0)
+      return sent;
+
+    nsent += sent;
+  }
+
+  return nsent;
+}
+
 const std::string &Node::getNameFull() {
   if (name_full.empty()) {
     auto is1 = getInputSignals(false) ? getInputSignals(false)->size() : 0;
@@ -377,6 +522,9 @@ SignalList::Ptr Node::getInputSignals(bool after_hooks) const {
 }
 
 SignalList::Ptr Node::getOutputSignals(bool after_hooks) const {
+  if (output_signals)
+    return output_signals;
+
   if (out.path)
     return out.path->getOutputSignals();
 
@@ -388,6 +536,9 @@ unsigned Node::getInputSignalsMaxCount() const {
 }
 
 unsigned Node::getOutputSignalsMaxCount() const {
+  if (output_width > 0)
+    return output_width;
+
   if (out.path)
     return out.path->getOutputSignalsMaxCount();
 

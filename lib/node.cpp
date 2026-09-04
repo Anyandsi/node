@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#include <algorithm>
 #include <regex>
 
 #include <fmt/ranges.h>
@@ -379,46 +380,44 @@ void Node::prepareOutputBuffer() {
 
   output_signals = std::make_shared<SignalList>();
   output_signals->resize(output_width);
-  auto nsigs = getInputSignals();
-
-  auto signalForSlot = [&](unsigned slot, Signal::Ptr fallback) {
-    auto sig =
-        nsigs && slot < nsigs->size() ? nsigs->getByIndex(slot) : Signal::Ptr();
-    if (sig)
-      return sig;
-
-    if (fallback)
-      return fallback;
-
-    return std::make_shared<Signal>(fmt::format("slot{}", slot), "",
-                                    SignalType::FLOAT);
-  };
 
   std::vector<bool> covered(output_width, false);
 
+  // Name each slot after the signal which the path writing it delivers there
   for (auto m : mapped) {
     auto me = m->getOutputMappingEntry();
     auto psigs = m->getPath()->getOutputSignals();
 
+    if (psigs && (int)psigs->size() < me->length)
+      logger->warn("Path {} delivers only {} of the {} values it maps into "
+                   "node {}. The remaining slots keep their previous value.",
+                   m->getPath()->toString(), psigs->size(), me->length,
+                   getName());
+
     for (int j = 0; j < me->length; j++) {
       unsigned slot = me->data.offset + j;
 
-      auto fallback = psigs && (unsigned)j < psigs->size()
-                          ? psigs->getByIndex(j)
-                          : Signal::Ptr();
+      if (psigs && (unsigned)j < psigs->size())
+        (*output_signals)[slot] = psigs->getByIndex(j);
 
-      (*output_signals)[slot] = signalForSlot(slot, fallback);
       covered[slot] = true;
     }
   }
 
+  auto nsigs = getInputSignals();
   std::vector<unsigned> uncovered;
-  for (unsigned i = 0; i < output_width; i++) {
-    if (!covered[i]) {
-      uncovered.push_back(i);
 
-      (*output_signals)[i] = signalForSlot(i, Signal::Ptr());
-    }
+  for (unsigned i = 0; i < output_width; i++) {
+    // The destination names its own inputs, so its list wins where it has one
+    if (nsigs && i < nsigs->size())
+      (*output_signals)[i] = nsigs->getByIndex(i);
+
+    if (!(*output_signals)[i])
+      (*output_signals)[i] = std::make_shared<Signal>(
+          fmt::format("slot{}", i), "", SignalType::FLOAT);
+
+    if (!covered[i])
+      uncovered.push_back(i);
   }
 
   if (!uncovered.empty())
@@ -430,7 +429,8 @@ void Node::prepareOutputBuffer() {
   if (!output_buffer)
     throw MemoryAllocationError();
 
-  output_buffer->length = 0; // Grows as the paths contribute their slices
+  // Always send the full vector, including slots which no path writes
+  output_buffer->length = output_width;
   output_buffer->signals = output_signals;
   output_buffer->flags = (int)SampleFlags::HAS_DATA |
                          (int)SampleFlags::HAS_SEQUENCE |
@@ -449,25 +449,21 @@ int Node::writeFromPath(PathDestination *pd, struct Sample *smps[],
     return write(smps, cnt);
 
   if (!output_buffer)
-    return -1;
+    throw RuntimeError(
+        "Path {} writes a slice of node {}, but the node has no output buffer",
+        pd->getPath()->toString(), getName());
 
+  // sample must be never sent while another path is half-way through updating its slice.
   std::lock_guard<CopyableMutex> guard(output_mutex);
 
-  unsigned nsent = 0;
-
-  // for each sample delivered, drop sample values into path's slots
   for (unsigned i = 0; i < cnt; i++) {
     struct Sample *smp = smps[i];
 
-    unsigned len = std::min(static_cast<unsigned>(me->length), smp->length);
+    unsigned len = std::min((unsigned)me->length, smp->length);
     for (unsigned j = 0; j < len; j++)
       output_buffer->data[me->data.offset + j] = smp->data[j];
 
-    unsigned high = me->data.offset + len;
-    if (high > output_buffer->length)
-      output_buffer->length = high;
-
-    output_buffer->ts = smp->ts;
+    output_buffer->ts.origin = time_now();
     output_buffer->sequence = output_sequence++;
 
     struct Sample *merged[] = {output_buffer};
@@ -475,11 +471,9 @@ int Node::writeFromPath(PathDestination *pd, struct Sample *smps[],
     int sent = write(merged, 1);
     if (sent < 0)
       return sent;
-
-    nsent += sent;
   }
 
-  return nsent;
+  return cnt;
 }
 
 const std::string &Node::getNameFull() {

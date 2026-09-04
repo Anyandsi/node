@@ -115,6 +115,8 @@ protected:
   struct Sample *output_buffer;
   SignalList::Ptr output_signals;
   unsigned output_width; // Number of slots, derived from the mappings.
+
+  // Sequence number of the merged samples.
   uint64_t output_sequence;
 
   /* The contributing paths each run in their own thread, so both the merge

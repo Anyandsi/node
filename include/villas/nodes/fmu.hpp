@@ -37,6 +37,9 @@ protected:
   int _write(struct Sample *smps[], unsigned cnt) override;
 
   bool writing_turn;
+  unsigned num_writers;
+  unsigned pending_writes;
+
   const char *path;
   const char *unpackPath;
 

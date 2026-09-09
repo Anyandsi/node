@@ -36,8 +36,8 @@ void FmuNode::loggerCallback(jm_callbacks *c, jm_string module,
 }
 
 FmuNode::FmuNode(const uuid_t &id, const std::string &name)
-    : Node(id, name), writing_turn(false), path(""), unpackPath(""), fmu(),
-      context() {
+    : Node(id, name), writing_turn(false), num_writers(0), pending_writes(0),
+      path(""), unpackPath(""), fmu(), context() {
   int ret;
   ret = pthread_mutex_init(&mutex, nullptr);
   if (ret)
@@ -105,6 +105,9 @@ int FmuNode::prepare() {
                       fmuSignalOut[i].type);
   }
 
+  num_writers = destinations.size();
+  pending_writes = writing_turn ? num_writers : 0;
+
   return Node::prepare();
 }
 
@@ -116,7 +119,7 @@ int FmuNode::_read(struct Sample *smps[], unsigned cnt) {
   const bool hasInputs = !fmuSignalIn.empty();
   // Lock thread
   pthread_mutex_lock(&mutex);
-  while (hasInputs && (writing_turn || currentTime >= stop_time)) {
+  while (hasInputs && (pending_writes > 0 || currentTime >= stop_time)) {
     pthread_cond_wait(&cv, &mutex);
   }
   double targetTime = currentTime + step_size;
@@ -217,8 +220,8 @@ int FmuNode::_read(struct Sample *smps[], unsigned cnt) {
 
   // Unlock thread
   if (hasInputs) {
-    writing_turn = true;
-    pthread_cond_signal(&cv);
+    pending_writes = num_writers;
+    pthread_cond_broadcast(&cv);
   }
 
   pthread_mutex_unlock(&mutex);
@@ -232,7 +235,7 @@ int FmuNode::_write(struct Sample *smps[], unsigned cnt) {
   if (fmuSignalOut.empty())
     return 0;
   pthread_mutex_lock(&mutex);
-  while (!writing_turn) {
+  while (pending_writes == 0) {
     pthread_cond_wait(&cv, &mutex);
   }
   ts = smps[0]->ts.origin;
@@ -285,8 +288,8 @@ int FmuNode::_write(struct Sample *smps[], unsigned cnt) {
   }
 
   // Unlock thread
-  writing_turn = false;
-  pthread_cond_signal(&cv);
+  pending_writes--;
+  pthread_cond_broadcast(&cv);
   pthread_mutex_unlock(&mutex);
 
   return 1;
@@ -311,17 +314,21 @@ int FmuNode::parse(json_t *json) {
   json_t *json_signals_in = nullptr;
   json_t *json_signals_out = nullptr;
   json_error_t err;
+  int writing_turn_flag = writing_turn;
   start_time = 0;
   step_size = 0.1;
   stop_time = INT_MAX;
   ret = json_unpack_ex(
       json, &err, 0, "{s:s, s:s, s?:b, s?:f, s?:f, s?:f, s?:{s:o}, s?:{s:o}}",
       "fmu_path", &path, "fmu_unpack_path", &unpackPath, "fmu_writing_turn",
-      &writing_turn, "stop_time", &stop_time, "start_time", &start_time,
+      &writing_turn_flag, "stop_time", &stop_time, "start_time", &start_time,
       "step_size", &step_size, "in", "signals", &json_signals_in, "out",
       "signals", &json_signals_out);
   if (ret)
     throw ConfigError(json, err, "node-config-node-fmu");
+
+  writing_turn = writing_turn_flag;
+
   if (stop_time == INT_MAX) {
     stop_time_defined = false;
   } else {
@@ -347,8 +354,8 @@ int FmuNode::parse(json_t *json) {
   // Swap in.signals and out.signals so that in.signals = FMU outputs and out.signals = FMU inputs.
   swapSignals();
 
-  // Initially set writing_turn to false if there are no input signals, _read() calls do_step() with default inputs.
-  writing_turn = !fmuSignalIn.empty();
+  if (fmuSignalIn.empty())
+    writing_turn = false;
 
   return 0;
 }

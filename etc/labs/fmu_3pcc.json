@@ -1,0 +1,106 @@
+{
+  "logging": {
+    "level": "warning"
+  },
+  "nodes": {
+    "ieee13bus": {
+      "type": "fmu",
+      "fmu_path": "grid_3pcc.fmu",
+      "fmu_unpack_path": "/tmp/villas-fmu/grid",
+      "fmu_writing_turn": false,
+      "start_time": 0.0,
+      "stop_time": 0.1,
+      "step_size": 0.00001,
+      "in": {
+        "signals": [
+          { "name": "In1", "type": "float" },
+          { "name": "In2", "type": "float" },
+          { "name": "In3", "type": "float" },
+          { "name": "In4", "type": "float" },
+          { "name": "In5", "type": "float" },
+          { "name": "In6", "type": "float" }
+        ]
+      },
+      "out": {
+        "signals": [
+          { "name": "Out1", "type": "float" },
+          { "name": "Out2", "type": "float" },
+          { "name": "Out3", "type": "float" },
+          { "name": "Out4", "type": "float" },
+          { "name": "Out5", "type": "float" },
+          { "name": "Out6", "type": "float" }
+        ]
+      }
+    },
+    "pv_bus675": {
+      "type": "fmu",
+      "fmu_path": "pv.fmu",
+      "fmu_unpack_path": "/tmp/villas-fmu/pv_bus675",
+      "fmu_writing_turn": true,
+      "start_time": 0.0,
+      "stop_time": 0.1,
+      "step_size": 0.00001,
+      "in": {
+        "signals": [
+          { "name": "In1", "type": "float" },
+          { "name": "In2", "type": "float" 
+        
+        },
+          { "name": "In3", "type": "float" }
+        ]
+      },
+      "out": {
+        "signals": [
+          { "name": "Out1", "type": "float" },
+          { "name": "Out2", "type": "float" },
+          { "name": "Out3", "type": "float" }
+        ]
+      }
+    },
+    "pv_bus680": {
+      "type": "fmu",
+      "fmu_path": "pv.fmu",
+      "fmu_unpack_path": "/tmp/villas-fmu/pv_bus680",
+      "fmu_writing_turn": true,
+      "start_time": 0.0,
+      "stop_time": 0.1,
+      "step_size": 0.00001,
+      "in": {
+        "signals": [
+          { "name": "In1", "type": "float" },
+          { "name": "In2", "type": "float" },
+          { "name": "In3", "type": "float" }
+        ]
+      },
+      "out": {
+        "signals": [
+          { "name": "Out1", "type": "float" },
+          { "name": "Out2", "type": "float" },
+          { "name": "Out3", "type": "float" }
+        ]
+      }
+    }
+  },
+  "paths": [
+    {
+      "in": "ieee13bus.data[0-2]",
+      "out": "pv_bus675",
+      "hooks": [ { "type": "print", "output": "grid_to_pv_bus675.dat" } ]
+    },
+    {
+      "in": "pv_bus675",
+      "out": "ieee13bus.data[0-2]",
+      "hooks": [ { "type": "print", "output": "pv_bus675_to_grid.dat" } ]
+    },
+    {
+      "in": "ieee13bus.data[3-5]",
+      "out": "pv_bus680",
+      "hooks": [ { "type": "print", "output": "grid_to_pv_bus680.dat" } ]
+    },
+    {
+      "in": "pv_bus680",
+      "out": "ieee13bus.data[3-5]",
+      "hooks": [ { "type": "print", "output": "pv_bus680_to_grid.dat" } ]
+    }
+  ]
+}

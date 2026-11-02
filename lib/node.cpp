@@ -382,8 +382,8 @@ void Node::prepareOutputBuffer() {
   std::vector<unsigned> uncovered;
 
   for (unsigned i = 0; i < output_width; i++) {
-    // The destination names its own inputs, so its list wins where it has one
-    if (nsigs && i < nsigs->size())
+    // Unused slots: take the node's own signal. Used slots: keep the path's signal.
+    if (!covered[i] && nsigs && i < nsigs->size())
       (*output_signals)[i] = nsigs->getByIndex(i);
 
     if (!(*output_signals)[i])

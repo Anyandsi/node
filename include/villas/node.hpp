@@ -245,6 +245,9 @@ public:
    */
   void prepareOutputBuffer();
 
+  // Path destinations of enabled path only.
+  PathDestinationList getActiveDestinations() const;
+
   // Reverse local and remote socket address.
   virtual int reverse() { return -1; }
 

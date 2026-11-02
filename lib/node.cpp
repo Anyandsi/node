@@ -315,7 +315,7 @@ int Node::write(struct Sample *smps[], unsigned cnt) {
 
 void Node::prepareOutputBuffer() {
   PathDestinationList mapped;
-  for (auto pd : destinations) {
+  for (auto pd : getActiveDestinations()) {
     if (pd->isOutputMapped())
       mapped.push_back(pd);
   }
@@ -408,6 +408,15 @@ void Node::prepareOutputBuffer() {
 
   for (unsigned i = 0; i < output_width; i++)
     output_buffer->data[i] = (*output_signals)[i]->init;
+}
+
+PathDestinationList Node::getActiveDestinations() const {
+  PathDestinationList active;
+  for (auto pd : destinations) {
+    if (pd->getPath()->isEnabled())
+      active.push_back(pd);
+  }
+  return active;
 }
 
 int Node::writeFromPath(PathDestination *pd, struct Sample *smps[],

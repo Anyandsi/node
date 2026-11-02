@@ -105,7 +105,7 @@ int FmuNode::prepare() {
                       fmuSignalOut[i].type);
   }
 
-  num_writers = destinations.size();
+  num_writers = getActiveDestinations().size();
   pending_writes = writing_turn ? num_writers : 0;
 
   return Node::prepare();

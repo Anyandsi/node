@@ -5,10 +5,10 @@
 
   nixConfig = {
     extra-substituters = [
-      "https://villas.cachix.org"
+      "https://cache.0l.de/villas"
     ];
     extra-trusted-public-keys = [
-      "villas.cachix.org-1:vCWp9IzwxFT6ovZivQAvn5ZuLST01bpAGXWwlGTZ9fA="
+      "villas:vZYuJcdoDPp60fe/LagBlf8vSQfVJpxmEd/pGxSS+DQ="
     ];
   };
 
@@ -24,6 +24,8 @@
     }:
     let
       inherit (nixpkgs) lib;
+
+      version = "1.2.0"; # x-release-please-version
 
       nixDir = ./packaging/nix;
 
@@ -66,15 +68,18 @@
       packagesWith = pkgs: rec {
         default = villas-node;
 
-        villas-node-python = pkgs.callPackage (nixDir + "/python.nix") { src = ./.; };
+        villas-node-python = pkgs.callPackage (nixDir + "/python.nix") {
+          src = ./.;
+          inherit version;
+        };
 
         villas-node-minimal = pkgs.callPackage (nixDir + "/villas.nix") {
           src = ./.;
-          version = "minimal";
+          version = "${version}-minimal";
         };
 
         villas-node = villas-node-minimal.override {
-          version = "full";
+          version = "${version}-full";
           withAllExtras = true;
           withAllFormats = true;
           withAllHooks = true;
@@ -94,9 +99,12 @@
 
         # Cross-compiled packages
         villas-node-x86_64-linux =
-          if pkgs.system == "x86_64-linux" then pkgs.villas-node else pkgs.pkgsCross.x86_64-linux.villas-node;
+          if pkgs.stdenv.hostPlatform.system == "x86_64-linux" then
+            pkgs.villas-node
+          else
+            pkgs.pkgsCross.x86_64-linux.villas-node;
         villas-node-aarch64-linux =
-          if pkgs.system == "aarch64-linux" then
+          if pkgs.stdenv.hostPlatform.system == "aarch64-linux" then
             pkgs.villas-node
           else
             pkgs.pkgsCross.aarch64-multiplatform.villas-node;
@@ -160,35 +168,33 @@
             libgit2
             nodejs
             pcre
+            redocly
             reuse
             cppcheck
             pre-commit
-            ruby # for pre-commit markdownlint hook
+            ruby # For pre-commit markdownlint hook
           ];
 
-          mkShellFor = stdenv: pkg: stdenv.mkDerivation {
-            name = "${pkg.pname}-${stdenv.cc.cc.pname}-devShell";
+          mkShellFor =
+            stdenv: pkg:
+            stdenv.mkDerivation {
+              name = "${pkg.pname}-${stdenv.cc.cc.pname}-devShell";
 
-            # disable all hardening to suppress warnings in debug builds
-            hardeningDisable = [ "all" ];
+              # Disable all hardening to suppress warnings in debug builds
+              hardeningDisable = [ "all" ];
 
-            # inherit inputs from pkg
-            buildInputs = pkg.buildInputs ++ packages;
-            nativeBuildInputs = pkg.nativeBuildInputs ++ packages;
-            propagatedBuildInputs = pkg.propagatedBuildInputs;
-            propagatedNativeBuildInputs = pkg.propagatedNativeBuildInputs;
-
-            # configure nix-ld for pre-commit
-            env = {
-              NIX_LD = lib.fileContents "${stdenv.cc}/nix-support/dynamic-linker";
-              NIX_LD_LIBRARY_PATH = lib.makeLibraryPath [ pkgs.gcc-unwrapped.lib ];
+              # Inherit inputs from pkg
+              buildInputs = pkg.buildInputs ++ packages;
+              nativeBuildInputs = pkg.nativeBuildInputs ++ packages;
+              propagatedBuildInputs = pkg.propagatedBuildInputs;
+              propagatedNativeBuildInputs = pkg.propagatedNativeBuildInputs;
+              env.NLOHMANN_JSON_SRC = pkgs.nlohmann_json.src;
             };
-          };
         in
         rec {
           default = gcc;
 
-          gcc = mkShellFor pkgs.stdenv pkgs.villas-node;
+          gcc = mkShellFor pkgs.gcc14Stdenv pkgs.villas-node;
           clang = mkShellFor pkgs.clangStdenv pkgs.villas-node;
 
           python = pkgs.mkShell {

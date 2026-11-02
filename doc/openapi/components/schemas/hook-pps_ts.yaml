@@ -1,0 +1,31 @@
+# yaml-language-server: $schema=http://json-schema.org/draft-07/schema
+# SPDX-FileCopyrightText: 2014-2023 Institute for Automation of Complex Power Systems, RWTH Aachen University
+# SPDX-License-Identifier: Apache-2.0
+---
+type: object
+required: [type, signal]
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: pps_ts
+
+  threshold:
+    type: number
+    default: 1.5
+    description: "The signal level threshold of the PPS signal which is used to detect an edge."
+
+  time_source:
+    type: string
+    enum:
+    - sample
+    - os
+    default: os
+    description: Defines from where the second value is derived.
+
+  priority:
+    default: 99
+    $ref: ./shared-hook-priority.yaml
+
+  signal:
+    $ref: ./shared-hook-signal.yaml

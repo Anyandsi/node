@@ -348,6 +348,11 @@ void Node::prepareOutputBuffer() {
       output_width = last + 1;
   }
 
+  // make sure that the buffer covers every input of the node
+  auto nsigs = getInputSignals();
+  if (nsigs && nsigs->size() > output_width)
+    output_width = nsigs->size();
+
   output_signals = std::make_shared<SignalList>();
   output_signals->resize(output_width);
 
@@ -374,7 +379,6 @@ void Node::prepareOutputBuffer() {
     }
   }
 
-  auto nsigs = getInputSignals();
   std::vector<unsigned> uncovered;
 
   for (unsigned i = 0; i < output_width; i++) {
